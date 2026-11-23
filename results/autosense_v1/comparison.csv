@@ -1,0 +1,3 @@
+mode,episode,max_nav_steps,NE_m,SR_pct,OSR_pct,SPL_pct
+workflow,birmingham_block_1/11/1,8,165.03,0.0,0.0,0.0
+autonomous,birmingham_block_1/11/1,8,218.96,0.0,0.0,0.0

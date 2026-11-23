@@ -73,6 +73,15 @@ class ExperimentArgs:
     map_name: Optional[str]
     episode_id: Optional[int]
     ann_id: Optional[int]
+    start_idx: int
+    num_episodes: Optional[int]
+
+    # GeoNav-AutoSense V1 runtime
+    runtime_mode: Literal['workflow', 'autonomous']
+    max_tools_per_step: int
+    max_total_llm_calls: int
+    max_episode_seconds: float
+    locate_max_step_m: float
 
     def to_dict(self):
         return asdict(self)
@@ -171,6 +180,22 @@ def parse_args():
                        help="指定 episode ID，如 11，用于选择特定案例")
     parser.add_argument('--ann_id', type=int, default=None,
                        help="指定 annotation ID，如 1，用于进一步区分案例")
+    parser.add_argument('--start_idx', type=int, default=0,
+                       help="从 split 的第几个 episode 开始评测（用于切片复现）")
+    parser.add_argument('--num_episodes', type=int, default=None,
+                       help="本次评测的 episode 数量；None 表示评测到 split 末尾")
+
+    # GeoNav-AutoSense V1: workflow 保持原流程，autonomous 启用自主工具调用
+    parser.add_argument('--runtime_mode', type=str, choices=['workflow', 'autonomous'], default='workflow',
+                       help="workflow=原 GeoNav 固定流程；autonomous=自主选择感知/查询工具")
+    parser.add_argument('--max_tools_per_step', type=int, default=3,
+                       help="每个物理导航步内允许的感知/查询工具调用上限")
+    parser.add_argument('--max_total_llm_calls', type=int, default=200,
+                       help="单 Episode 的模型决策调用总预算（含工具内部调用不计）")
+    parser.add_argument('--max_episode_seconds', type=float, default=1800.0,
+                       help="单 Episode 墙钟时间上限（秒）")
+    parser.add_argument('--locate_max_step_m', type=float, default=80.0,
+                       help="locate 单步允许的最大位置变化（米）")
 
     args = parser.parse_args()
     args.gsam_rgb_shape = args.gsam_rgb_shape, args.gsam_rgb_shape

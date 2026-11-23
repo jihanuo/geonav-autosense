@@ -1567,6 +1567,20 @@ class GeonavAgent(Agent):
         print(f"Saved final position map: {self.episode.id}")
 
     def run(self):
+        """Dispatch to the selected runtime (GeoNav-AutoSense V1).
+
+        ``workflow`` keeps the original GeoNav behaviour unchanged;
+        ``autonomous`` hands control to the bounded tool-calling loop.
+        """
+        runtime_mode = getattr(self.args, "runtime_mode", "workflow")
+        if runtime_mode == "autonomous":
+            from scenegraphnav.autonomy.runtime import run_autonomous_episode
+            return run_autonomous_episode(self)
+        if runtime_mode != "workflow":
+            raise ValueError(f"unknown runtime_mode: {runtime_mode!r}")
+        return self.run_workflow()
+
+    def run_workflow(self):
         Success = False
         strategy = ''
         pos_log = []

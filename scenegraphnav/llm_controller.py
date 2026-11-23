@@ -472,9 +472,15 @@ class LLMController:
         if operation_chain is None:
             return [], None
             # 使用robust_subgraph_query执行查询
-        results, query_logs = self.query_engine.robust_subgraph_query(
+        # 兼容性修复：QueryEngine.robust_subgraph_query 在不同分支下可能只返回节点列表，
+        # 也可能返回 (节点列表, 查询日志)。这里统一成二元结果，避免直接解包失败。
+        query_output = self.query_engine.robust_subgraph_query(
             operation_chain, fallback=True, min_results=1, debug=debug
         )
+        if isinstance(query_output, tuple) and len(query_output) == 2:
+            results, query_logs = query_output
+        else:
+            results, query_logs = query_output, None
         # 添加操作链信息到日志
         query_info = {
             "instruction": instruction,
