@@ -31,3 +31,5 @@ utils/val_seen
 environment.yml
 debug_*.py
 try.py
+
+*.official.bak

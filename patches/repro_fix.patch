@@ -1,0 +1,162 @@
+diff --git a/main_geonav.py b/main_geonav.py
+index f36e4ba..f526202 100644
+--- a/main_geonav.py
++++ b/main_geonav.py
+@@ -17,11 +17,11 @@ from scenegraphnav.agent import GeonavAgent, ChatAgent
+ 
+ DEVICE = 'cuda'
+ test_data = 'all'
+-gpt_api_key =  ""
+-#qwen3-vl-plus
+-qwen_api_key = "sk-xxx"
+-model_api_key="ms-xxx"
+-zhipu_api_key=""
++# API 凭据一律从环境变量读取，禁止写死在源码中（复现修复 4.3）
++gpt_api_key = os.environ.get("OPENAI_API_KEY", "")
++qwen_api_key = os.environ.get("DASHSCOPE_API_KEY", "")
++model_api_key = os.environ.get("MODELSCOPE_API_KEY", "")
++zhipu_api_key = os.environ.get("ZHIPU_API_KEY", "")
+ #火山引擎豆包seed、deepseek
+ args = parse_args()
+ 
+@@ -99,11 +99,10 @@ if args.mode == 'eval':
+         }
+             
+         if args.deployment == 'local':
+-            return OpenAI(**MODEL_CONFIGS['local']), OpenAI(
+-                api_key=gpt_api_key,
+-                base_url=MODEL_CONFIGS['online']['base_urls'][LLM_backbone]
+-            )
++            return OpenAI(**MODEL_CONFIGS['local']), OpenAI(**MODEL_CONFIGS['local'])
+         else:
++            if not qwen_api_key:
++                raise RuntimeError("DASHSCOPE_API_KEY is missing (export it before online inference)")
+             if VLM_backbone == 'GLM':
+                 vlmodel = ZhipuAiClient(api_key=zhipu_api_key)
+             if LLM_backbone == 'GLM':
+@@ -137,18 +136,49 @@ if args.mode == 'eval':
+         'Search': [],
+         'Locate': []
+     }
+-    output_directory = os.path.join(args.output_dir, "geonav_origin", "val_unseen")
++    run_meta = {
++        "split": args.split,
++        "seed": args.seed,
++        "model": args.model,
++        "ablation": args.ablation,
++        "deployment": args.deployment,
++        "altitude": args.altitude,
++        "eval_max_timestep": args.eval_max_timestep,
++        "success_dist": args.success_dist,
++        "start_idx": args.start_idx,
++        "num_episodes": args.num_episodes,
++    }
++    try:
++        import subprocess
++        run_meta["git_commit"] = subprocess.check_output(
++            ["git", "rev-parse", "HEAD"], cwd=os.path.dirname(os.path.abspath(__file__)), text=True
++        ).strip()
++    except Exception:
++        run_meta["git_commit"] = "unknown"
++
++    output_directory = os.path.join(args.output_dir, "geonav_origin", args.split)
+     os.makedirs(output_directory, exist_ok=True)  # 自动创建目录（包括父目录）
+-    metrics_jsonl_path = os.path.join(output_directory, "episode_metrics_val_unseen-2.jsonl")
++    metrics_jsonl_path = os.path.join(output_directory, f"episode_metrics_{args.split}.jsonl")
++    with open(os.path.join(output_directory, "run_meta.json"), 'w') as meta_f:
++        json.dump(run_meta, meta_f, ensure_ascii=False, indent=2)
+ 
+-    start_idx = 2385
+-    end_idx = None
++    start_idx = args.start_idx
++    num_episodes = args.num_episodes
++    if num_episodes is not None and num_episodes > 0:
++        end_idx = start_idx + num_episodes
++    elif args.test_one_example:
++        end_idx = start_idx + 1
++    else:
++        end_idx = None
+     # 确保 end_idx 不越界
+     if end_idx is not None:
+         end_idx = min(end_idx, len(test_episodes))
++    evaluated_episodes = test_episodes[start_idx:end_idx]
++    assert evaluated_episodes, f'No episodes selected: check split={args.split}, slice=[{start_idx}:{end_idx}], total={len(test_episodes)}'
++    print(f"Evaluating {len(evaluated_episodes)} / {len(test_episodes)} episodes of split={args.split}")
+     with open(metrics_jsonl_path, 'a') as metrics_f:
+-        for i, episode in enumerate(test_episodes[start_idx:end_idx], start=start_idx):
+-            print(f"Running episode {i+1}")
++        for i, episode in enumerate(evaluated_episodes, start=start_idx):
++            print(f"Running episode {i+1} id={episode.id} map={episode.map_name}")
+             # 创建Agent实例
+             agent = GeonavAgent(args, episode.start_pose, episode, vlmodel, llmodel, set_height=None)
+             # 设置目标
+@@ -166,11 +196,14 @@ if args.mode == 'eval':
+             # 累积运行结果
+             #agent.strategy_distances
+             # 实时评估
+-            current_metrics = eval_planning_metrics(args, test_episodes[start_idx:i+1], trajectory_logs)
++            current_metrics = eval_planning_metrics(args, evaluated_episodes[: i - start_idx + 1], trajectory_logs)
+             print(f"[Episode {i+1}] NE: {current_metrics.mean_final_pos_to_goal_dist:.1f}, SR: {current_metrics.success_rate_final_pos_to_goal*100:.2f}, OSR {current_metrics.success_rate_oracle_pos_to_goal*100: .2f}, SPL {current_metrics.success_rate_weighted_by_path_length*100: .2f}metrics")
+             # 构造当前行的 JSON 对象（包含 episode 信息 + 累计指标）
+             metric_entry = {
+                 "Episode": i+1,
++                "split": args.split,
++                "seed": args.seed,
++                "map_name": episode.map_name,
+                 "episode_id": episode.id,
+                 "NE": current_metrics.mean_final_pos_to_goal_dist,
+                 "SR": current_metrics.success_rate_final_pos_to_goal,
+@@ -194,7 +227,8 @@ if args.mode == 'eval':
+             metrics_f.flush()  # 立即写入磁盘，防止缓存丢失
+ 
+ 
+-    metrics = eval_planning_metrics(args, test_episodes, trajectory_logs)
++    assert all(ep.id in trajectory_logs for ep in evaluated_episodes), 'Missing trajectory logs for some evaluated episodes'
++    metrics = eval_planning_metrics(args, evaluated_episodes, trajectory_logs)
+ 
+     print(f"{args.split} -- NE {metrics.mean_final_pos_to_goal_dist: .1f}, SR {metrics.success_rate_final_pos_to_goal*100: .2f}, OSR {metrics.success_rate_oracle_pos_to_goal*100: .2f}, SPL {metrics.success_rate_weighted_by_path_length*100: .2f}metrics")
+     for strategy, distances in strategy_distance_records.items():
+@@ -205,11 +239,17 @@ if args.mode == 'eval':
+             print(f"No data available for {strategy}")
+     noise = f"noise_{args.gps_noise_scale}" if args.gps_noise_scale > 0 else ""
+     map_type = f"_{args.map_type}" if args.map_type != 'topdown_map' else ""
+-    
+-    with open(args.output_dir + f'geonav_{args.split}_{args.ablation}_{test_data}{map_type}.json', 'w') as f:
++
++    final_json_path = os.path.join(
++        args.output_dir, f'geonav_{args.split}_{args.ablation}_{test_data}{map_type}.json'
++    )
++    with open(final_json_path, 'w') as f:
+         json.dump({
++            'run_meta': run_meta,
++            'num_episodes': len(evaluated_episodes),
+             'metrics': metrics.to_dict(),
+             'success': results,
+             'trajectory_logs': {str(eps_id): [tuple(pose) for pose in trajectory] for eps_id, trajectory in trajectory_logs.items()},
+             'strategy_averages': {k: (sum(v)/len(v) if len(v)>0 else None) for k,v in strategy_distance_records.items()}
+         }, f)
++    print(f'Final metrics saved to {final_json_path}')
+diff --git a/scenegraphnav/parser.py b/scenegraphnav/parser.py
+index 021fc78..fded72b 100644
+--- a/scenegraphnav/parser.py
++++ b/scenegraphnav/parser.py
+@@ -73,6 +73,8 @@ class ExperimentArgs:
+     map_name: Optional[str]
+     episode_id: Optional[int]
+     ann_id: Optional[int]
++    start_idx: int
++    num_episodes: Optional[int]
+ 
+     def to_dict(self):
+         return asdict(self)
+@@ -171,6 +173,10 @@ def parse_args():
+                        help="指定 episode ID，如 11，用于选择特定案例")
+     parser.add_argument('--ann_id', type=int, default=None,
+                        help="指定 annotation ID，如 1，用于进一步区分案例")
++    parser.add_argument('--start_idx', type=int, default=0,
++                       help="从 split 的第几个 episode 开始评测（用于切片复现）")
++    parser.add_argument('--num_episodes', type=int, default=None,
++                       help="本次评测的 episode 数量；None 表示评测到 split 末尾")
+ 
+     args = parser.parse_args()
+     args.gsam_rgb_shape = args.gsam_rgb_shape, args.gsam_rgb_shape
